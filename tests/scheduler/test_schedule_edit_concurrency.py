@@ -11,6 +11,7 @@ import pytest
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from config.constants.scheduler import SCHEDULER_SCHEDULE_CHANGED_AT_PARAM
+from config.constants.work_items import WORK_ITEM_REMINDER_RUN_AT_PARAM
 from config.principal import Actor, Principal, StorageScope
 from config.scope_context import bound_storage_scope
 from infrastructure.scheduling.scheduler import executor, loops, runner, tasks
@@ -460,3 +461,32 @@ def test_current_trigger_accepts_both_dst_fold_ticks_and_rejects_old_slot() -> N
     assert not obsolete_schedule_tick(task, "2026-10-25T00:30:00Z")
     assert not obsolete_schedule_tick(task, "2026-10-25T01:30:00Z")
     assert obsolete_schedule_tick(task, "2026-10-25T01:45:00Z")
+
+
+def _reminder_task(run_at: str) -> ScheduledTask:
+    return ScheduledTask(
+        id="reminder-1",
+        kind=TaskKind.WORK_ITEM_REMINDER,
+        cron="",
+        provider=Provider.SLACK,
+        params={
+            "work_item_id": "WI-123",
+            WORK_ITEM_REMINDER_RUN_AT_PARAM: run_at,
+            SCHEDULER_SCHEDULE_CHANGED_AT_PARAM: "2026-11-12T10:00:00+00:00",
+        },
+    )
+
+
+def test_work_item_reminder_tick_at_its_run_at_is_not_obsolete() -> None:
+    task = _reminder_task("2026-11-13T10:00:00+00:00")
+
+    assert not obsolete_schedule_tick(task, "2026-11-13T10:00:00Z")
+    assert obsolete_schedule_tick(task, "2026-11-13T10:30:00Z")
+    assert obsolete_schedule_tick(task, "2026-11-12T09:00:00Z")
+
+
+def test_work_item_reminder_fractional_run_at_matches_second_precision_tick() -> None:
+    task = _reminder_task("2026-11-13T10:00:00.500000+00:00")
+
+    assert not obsolete_schedule_tick(task, "2026-11-13T10:00:00Z")
+    assert obsolete_schedule_tick(task, "2026-11-13T10:01:00Z")
