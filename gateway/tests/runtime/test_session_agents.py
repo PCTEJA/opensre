@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -569,6 +570,45 @@ def test_drop_session_removes_cached_agent_and_output(monkeypatch: pytest.Monkey
     assert pool.cached_session_ids == frozenset()
     second = pool.agent_for(session=session, output=MagicMock(), logger=logger)
     assert second is not first
+
+
+def test_drop_session_mid_turn_keeps_the_lock_serializing_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _fake_agent_pool(monkeypatch)
+    session_id = "session-drop-mid-turn"
+    entered_first = threading.Event()
+    release_first = threading.Event()
+    second_entered = False
+
+    def first_turn() -> None:
+        with pool._lock_for(session_id):
+            entered_first.set()
+            release_first.wait(timeout=2.0)
+
+    def second_turn() -> None:
+        nonlocal second_entered
+        with pool._lock_for(session_id):
+            second_entered = True
+
+    first = threading.Thread(target=first_turn)
+    first.start()
+    assert entered_first.wait(timeout=2.0)
+    original_lock = pool._session_locks[session_id]
+
+    pool.drop_session(session_id)
+
+    assert pool._session_locks.get(session_id) is original_lock
+    second = threading.Thread(target=second_turn)
+    second.start()
+    second.join(timeout=0.2)
+    assert not second_entered
+
+    release_first.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+    assert second_entered
+    assert session_id not in pool._session_locks
 
 
 def test_retain_only_current_session_drops_stale_ids_after_rotation(
